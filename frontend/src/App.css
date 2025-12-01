@@ -1,0 +1,58 @@
+/* 让 body 占满屏幕，背景是深色 */
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  background-color: #f7f1e3;
+  color: #303030;
+}
+
+/* #root 占满整个视口，并用 flex 把内容居中 */
+#root {
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+
+  display: flex;
+  align-items: center; 
+  justify-content: center;
+}
+
+/* 真正的内容容器 */
+.app-container {
+  width: 100%;
+  max-width: 960px; 
+  padding: 2rem;
+  text-align: center;
+}
+
+.app-title {
+  font-size: 4rem;
+  margin-bottom: 0.5rem;
+}
+
+.app-divider {
+  margin: 1rem auto 2rem;
+  width: 80%;
+  border: none;
+  border-bottom: 1px solid #555;
+}
+
+.app-error {
+  color: #ff4d4f;
+  margin-top: 1rem;
+}
+
+.app-connect-btn {
+  padding: 0.6rem 1.6rem;
+  border-radius: 999px;
+  border: none;
+  font-size: 1rem;
+  cursor: pointer;
+  background: #fff;
+  color: #000;
+}
+.app-connect-btn:hover {
+  filter: brightness(0.9);
+}
