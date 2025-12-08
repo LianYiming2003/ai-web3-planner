@@ -1,20 +1,19 @@
 import { useState, useEffect } from "react";
 import { useWallet } from "./hooks/useWallet";
 import { Contract } from "ethers";
+import TaskInbox from "./components/TaskInbox";
 import "./App.css";
 
-// 1) 你 TaskManager 的 ABI（只保留你要用到的函数）
-//   为啥要 ABI？因为 ethers 需要 ABI 才知道怎么编码调用。
-//   替代方案：import 你 hardhat artifacts 的完整 abi JSON。
+// ---- ABI：注意这里是带 title 的 4 个参数版本 ----
 const TASK_MANAGER_ABI = [
-  "function createTask(string ipfsHash, uint256 dueAt, uint8 priority) external",
+  "function createTask(string title, string ipfsHash, uint256 dueAt, uint8 priority) external",
   "function nextId() view returns (uint256)",
-  "function tasks(uint256) view returns (uint256 id, address owner, string ipfsHash, uint256 dueAt, uint8 priority, uint8 status, uint256 createdAt)"
+  "function tasks(uint256) view returns (uint256 id, address owner, string title, string ipfsHash, uint256 dueAt, uint8 priority, uint8 status, uint256 createdAt)"
 ];
 
-// 2) 合约地址（你部署后填这里 or 用 env）
-//   为啥 env 更好？不同网络不同地址，切网不用改代码。
-const TASK_MANAGER_ADDRESS = import.meta.env.VITE_TASK_MANAGER_ADDR as string;
+// 合约地址，从 .env 读取
+const TASK_MANAGER_ADDRESS = import.meta.env
+  .VITE_TASK_MANAGER_ADDR as string;
 
 type ParsedTask = {
   title: string;
@@ -30,13 +29,14 @@ function App() {
   const [chainId, setChainId] = useState<number | null>(null);
   const [msg, setMsg] = useState("");
 
-  // ---- Week 3 新增状态 ----
+  // Week3：自然语言输入状态
   const [inputText, setInputText] = useState("");
   const [parsedTask, setParsedTask] = useState<ParsedTask | null>(null);
   const [ipfsCid, setIpfsCid] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // 读取当前 chainId
   useEffect(() => {
     if (!provider || !account) return;
     provider
@@ -51,7 +51,7 @@ function App() {
   const shouldShowConnect =
     !account && (!error || !error.startsWith("No Ethereum wallet found"));
 
-  // 3) 核心：自然语言 → 后端解析+IPFS → 上链
+  // Week3 核心：自然语言 → 后端解析 + IPFS → 上链
   const handleAskGene = async () => {
     if (!provider || !account) {
       setMsg("Please connect wallet first.");
@@ -69,8 +69,7 @@ function App() {
     setTxHash(null);
 
     try {
-      // --- A) 调后端 parsing endpoint ---
-      // 为啥要后端？因为 OpenAI key 和 IPFS token 不能暴露在前端。
+      // A) 调后端解析接口
       const resp = await fetch("http://localhost:4000/api/parse-and-store", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -88,17 +87,19 @@ function App() {
       setParsedTask(parsed);
       setIpfsCid(cid);
 
-      // --- B) 计算 dueTs 并上链 ---
-      // 合约要 uint 秒级时间戳
-      // 如果 parsed.due 缺失，就设置为 0（你也可以改成 now+1day）
+      // B) 计算 dueTs 并上链
       const dueTs = parsed.due
         ? Math.floor(new Date(parsed.due).getTime() / 1000)
         : 0;
 
-      // priority 强制转 number，再 clamp 到 uint8 范围
       const priority = Math.max(1, Math.min(5, Number(parsed.priority || 3)));
 
-      // ethers v6: provider.getSigner()
+      // 从 parsed / 输入里搞一个 title 上链
+      const titleForChain =
+        parsed.title && parsed.title.trim().length > 0
+          ? parsed.title.trim()
+          : inputText.slice(0, 80); // 防止为空，直接取前 80 个字符当标题
+
       const signer = await provider.getSigner();
       const taskManager = new Contract(
         TASK_MANAGER_ADDRESS,
@@ -106,7 +107,13 @@ function App() {
         signer
       );
 
-      const tx = await taskManager.createTask(cid, dueTs, priority);
+      // ⚠️ 注意：这里是 4 个参数：title, ipfsHash, dueAt, priority
+      const tx = await taskManager.createTask(
+        titleForChain,
+        cid,
+        dueTs,
+        priority
+      );
       setMsg("Transaction sent, waiting confirmation...");
       const receipt = await tx.wait();
 
@@ -127,24 +134,27 @@ function App() {
 
       {account && (
         <div>
-          <p><b>Account:</b> {account}</p>
-          <p><b>Chain ID:</b> {chainId ?? "-"}</p>
+          <p>
+            <b>Account:</b> {account}
+          </p>
+          <p>
+            <b>Chain ID:</b> {chainId ?? "-"}
+          </p>
         </div>
       )}
 
       {shouldShowConnect && (
-        <button
-          className="app-connect-btn"
-          onClick={() => connect()}
-        >
+        <button className="app-connect-btn" onClick={() => connect()}>
           Connect Wallet
         </button>
       )}
 
-      {/* ---- Week 3 UI：Ask Gene 输入框 ---- */}
+      {/* Week3：Ask Gene 输入区 */}
       {account && (
         <div style={{ marginTop: 20 }}>
-          <p><b>Ask Gene</b></p>
+          <p>
+            <b>Ask Gene</b>
+          </p>
           <input
             style={{ width: "100%", padding: 8 }}
             placeholder='e.g. "Tomorrow 3pm finish CS544 HW, priority 4, 90min"'
@@ -163,7 +173,7 @@ function App() {
         </div>
       )}
 
-      {/* ---- 展示解析结果 + cid + tx ---- */}
+      {/* 展示解析结果 + CID + Tx */}
       {parsedTask && (
         <div style={{ marginTop: 20 }}>
           <h3>Parsed Task (from GPT)</h3>
@@ -187,6 +197,13 @@ function App() {
 
       {msg && <p style={{ color: "gray" }}>{msg}</p>}
       {error && <p className="app-error">{error}</p>}
+
+      {/* Week4：Task Inbox 列表 */}
+      {account && provider && (
+        <div style={{ marginTop: 40 }}>
+          <TaskInbox provider={provider as any} account={account} />
+        </div>
+      )}
     </div>
   );
 }

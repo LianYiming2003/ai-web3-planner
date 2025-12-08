@@ -10,7 +10,7 @@ body {
 /* #root 占满整个视口，并用 flex 把内容居中 */
 #root {
   width: 100vw;
-  height: 100vh;
+  min-height: 100vh;
   margin: 0;
   padding: 0;
 
