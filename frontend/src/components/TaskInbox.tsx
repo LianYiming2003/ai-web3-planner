@@ -28,9 +28,11 @@ type Suggestion = {
 interface Props {
   provider: ethers.providers.Web3Provider | null;
   account: string | null;
+  // ✅ 新增：TaskInbox 外面（App）可以传进来的回调，用来刷新 calendarTasks
+  onTasksChanged?: () => Promise<void> | void;
 }
 
-const TaskInbox: React.FC<Props> = ({ provider, account }) => {
+const TaskInbox: React.FC<Props> = ({ provider, account, onTasksChanged }) => {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(false);
   const [txPendingId, setTxPendingId] = useState<number | null>(null);
@@ -82,7 +84,7 @@ const TaskInbox: React.FC<Props> = ({ provider, account }) => {
           return {
             id: Number(t.id),
             owner: t.owner,
-            title: t.title, // 👈 从链上拿标题
+            title: t.title,
             ipfsHash: t.ipfsHash,
             dueAt: dueAtNum > 0 ? new Date(dueAtNum * 1000) : null,
             priority: Number(t.priority),
@@ -92,7 +94,8 @@ const TaskInbox: React.FC<Props> = ({ provider, account }) => {
           };
         });
 
-        setTasks(mapped.filter((t) => t.status != "Cancelled"));
+        // 不显示 Cancelled
+        setTasks(mapped.filter((t) => t.status !== "Cancelled"));
       } catch (err) {
         console.error("load tasks error", err);
       } finally {
@@ -140,8 +143,13 @@ const TaskInbox: React.FC<Props> = ({ provider, account }) => {
       const tx = await tm.setStatus(id, newStatus);
       await tx.wait();
 
+      // ✅ 通知外层（App）重新从链上拉任务，更新 Calendar
+      if (onTasksChanged) {
+        await onTasksChanged();
+      }
+
       setTasks((prev) => {
-        // 2 = Cancelled: 直接从列表里移除（软删）
+        // 2 = Cancelled: 直接从列表移除（软删）
         if (newStatus === 2) {
           return prev.filter((t) => t.id !== id);
         }
@@ -181,6 +189,11 @@ const TaskInbox: React.FC<Props> = ({ provider, account }) => {
       const tx = await tm.rescheduleTask(id, newTs);
       await tx.wait();
 
+      // ✅ 通知外层刷新 Calendar 任务
+      if (onTasksChanged) {
+        await onTasksChanged();
+      }
+
       setTasks((prev) =>
         prev.map((t) => (t.id === id ? { ...t, dueAt: newDate } : t))
       );
@@ -191,7 +204,7 @@ const TaskInbox: React.FC<Props> = ({ provider, account }) => {
     }
   }
 
-  // ------------------ 4. AI Suggest（先用兜底） ------------------
+  // ------------------ 4. AI Suggest（保持原来的兜底实现） ------------------
   async function fetchSuggestion(taskId: number) {
     try {
       const resp = await fetch(`/api/gpt/suggest?taskId=${taskId}`);
@@ -288,12 +301,10 @@ const TaskInbox: React.FC<Props> = ({ provider, account }) => {
             >
               {/* 左边：标题 + 详情 */}
               <div className="space-y-1">
-                {/* 标题 */}
                 <div className="text-base font-semibold">
                   {t.title || `Task #${t.id}`}
                 </div>
 
-                {/* 状态 / 优先级 / 来源 */}
                 <div className="flex items-center gap-2 text-xs">
                   <span className="px-2 py-0.5 rounded-full border">
                     {t.status}
@@ -312,7 +323,6 @@ const TaskInbox: React.FC<Props> = ({ provider, account }) => {
                   </span>
                 </div>
 
-                {/* due / created */}
                 <div className="text-xs">
                   Due: {t.dueAt ? t.dueAt.toLocaleString() : "no deadline"}
                 </div>
@@ -320,7 +330,6 @@ const TaskInbox: React.FC<Props> = ({ provider, account }) => {
                   Created: {t.createdAt.toLocaleString()}
                 </div>
 
-                {/* IPFS 简略显示 */}
                 <div className="text-xs">
                   IPFS:{" "}
                   {t.ipfsHash ? t.ipfsHash.slice(0, 18) + "..." : "(none)"}
@@ -416,5 +425,3 @@ const TaskInbox: React.FC<Props> = ({ provider, account }) => {
 };
 
 export default TaskInbox;
-
-

@@ -1,19 +1,32 @@
+// src/App.tsx
 import { useState, useEffect } from "react";
+import { Contract, ethers } from "ethers";
 import { useWallet } from "./hooks/useWallet";
-import { Contract } from "ethers";
 import TaskInbox from "./components/TaskInbox";
+import TaskCalendar from "./components/TaskCalendar";
+import TaskManagerABIJson from "./abis/TaskManager.json";
 import "./App.css";
 
-// ---- ABI：注意这里是带 title 的 4 个参数版本 ----
-const TASK_MANAGER_ABI = [
-  "function createTask(string title, string ipfsHash, uint256 dueAt, uint8 priority) external",
-  "function nextId() view returns (uint256)",
-  "function tasks(uint256) view returns (uint256 id, address owner, string title, string ipfsHash, uint256 dueAt, uint8 priority, uint8 status, uint256 createdAt)"
-];
+// ----------------- 合约 ABI & 地址 -----------------
+const TASK_MANAGER_ABI =
+  (TaskManagerABIJson as any).abi ?? TaskManagerABIJson;
 
-// 合约地址，从 .env 读取
 const TASK_MANAGER_ADDRESS = import.meta.env
   .VITE_TASK_MANAGER_ADDR as string;
+
+// ----------------- 类型定义 -----------------
+export type OnChainTask = {
+  id: bigint;
+  owner: string;
+  title: string;
+  ipfsHash: string;
+  dueAt: bigint;
+  priority: number;
+  status: number; // 0 Active, 1 Completed, 2 Cancelled
+  createdAt: bigint;
+  lastStart: bigint;
+  lastEnd: bigint;
+};
 
 type ParsedTask = {
   title: string;
@@ -23,6 +36,7 @@ type ParsedTask = {
   durationMinutes?: number;
 };
 
+// ----------------- 组件本体 -----------------
 function App() {
   const { provider, account, connect, error } = useWallet();
 
@@ -35,6 +49,9 @@ function App() {
   const [ipfsCid, setIpfsCid] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Week5：给 Calendar 用的链上任务
+  const [calendarTasks, setCalendarTasks] = useState<OnChainTask[]>([]);
 
   // 读取当前 chainId
   useEffect(() => {
@@ -51,7 +68,52 @@ function App() {
   const shouldShowConnect =
     !account && (!error || !error.startsWith("No Ethereum wallet found"));
 
-  // Week3 核心：自然语言 → 后端解析 + IPFS → 上链
+  // ----------------- 工具函数：从合约加载任务 -----------------
+  const loadCalendarTasks = async (
+    contractInstance: Contract,
+    userAccount: string,
+    setter: (tasks: OnChainTask[]) => void
+  ) => {
+    const raw = await contractInstance.getTasksByOwner(userAccount);
+
+    const normalized: OnChainTask[] = raw.map((t: any) => ({
+      id: BigInt(t.id),
+      owner: t.owner,
+      title: t.title,
+      ipfsHash: t.ipfsHash,
+      dueAt: BigInt(t.dueAt),
+      priority: Number(t.priority),
+      status: Number(t.status),
+      createdAt: BigInt(t.createdAt),
+      lastStart: BigInt(t.lastStart ?? 0),
+      lastEnd: BigInt(t.lastEnd ?? 0),
+    }));
+
+    setter(normalized);
+  };
+
+  // 供 TaskInbox / TaskCalendar 调用的刷新函数
+  const refreshCalendarTasks = async () => {
+    if (!provider || !account) return;
+    const signer = await provider.getSigner();
+    const contract = new Contract(
+      TASK_MANAGER_ADDRESS,
+      TASK_MANAGER_ABI,
+      signer
+    );
+    await loadCalendarTasks(contract, account, setCalendarTasks);
+  };
+
+  // provider 或 account 变化时，自动拉一次任务给 Calendar
+  useEffect(() => {
+    if (!provider || !account) return;
+    refreshCalendarTasks().catch((e) =>
+      console.warn("refreshCalendarTasks error:", e)
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider, account]);
+
+  // ----------------- Week3：自然语言 → 后端解析 + IPFS → 上链 -----------------
   const handleAskGene = async () => {
     if (!provider || !account) {
       setMsg("Please connect wallet first.");
@@ -70,10 +132,13 @@ function App() {
 
     try {
       // A) 调后端解析接口
-      const resp = await fetch("http://localhost:4000/api/parse-and-store", {
+      const backendUrl =
+        import.meta.env.VITE_BACKEND_URL || "http://localhost:4000";
+
+      const resp = await fetch(`${backendUrl}/api/parse-and-store`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: inputText })
+        body: JSON.stringify({ text: inputText }),
       });
 
       if (!resp.ok) {
@@ -107,7 +172,6 @@ function App() {
         signer
       );
 
-      // ⚠️ 注意：这里是 4 个参数：title, ipfsHash, dueAt, priority
       const tx = await taskManager.createTask(
         titleForChain,
         cid,
@@ -119,6 +183,9 @@ function App() {
 
       setTxHash(receipt.hash);
       setMsg("Task created on-chain ✅");
+
+      // C) 上链成功后刷新给 Calendar 用的任务
+      await refreshCalendarTasks();
     } catch (e: any) {
       console.error(e);
       setMsg(e.message || "Unknown error");
@@ -127,9 +194,10 @@ function App() {
     }
   };
 
+  // ----------------- 渲染 -----------------
   return (
     <div className="app-container">
-      <h1 className="app-title">Week 3 - Ask Gene Demo</h1>
+      <h1 className="app-title">Week 5 Demo</h1>
       <hr className="app-divider" />
 
       {account && (
@@ -201,7 +269,24 @@ function App() {
       {/* Week4：Task Inbox 列表 */}
       {account && provider && (
         <div style={{ marginTop: 40 }}>
-          <TaskInbox provider={provider as any} account={account} />
+          <TaskInbox
+            provider={provider as any}
+            account={account}
+            // TaskInbox 修改任务状态 / due 之后，通知 App 刷新 Calendar 数据
+            onTasksChanged={refreshCalendarTasks}
+          />
+        </div>
+      )}
+
+      {/* Week5：Calendar 视图（Google Calendar + time-blocked tasks） */}
+      {account && provider && (
+        <div style={{ marginTop: 40 }}>
+          <h2>Calendar & Time Blocking</h2>
+          <TaskCalendar
+            tasks={calendarTasks}
+            provider={provider as any}
+            onTasksChanged={refreshCalendarTasks}
+          />
         </div>
       )}
     </div>
@@ -209,3 +294,5 @@ function App() {
 }
 
 export default App;
+
+

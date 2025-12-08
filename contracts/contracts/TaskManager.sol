@@ -17,6 +17,10 @@ contract TaskManager {
         uint8 priority;
         Status status;
         uint256 createdAt;
+
+        // ✅ 为了 time-block / 日历集成新增的字段（可选，但很好用）
+        uint256 lastStart; // 最近一次在日历上的开始时间（UNIX timestamp）
+        uint256 lastEnd;   // 最近一次在日历上的结束时间（UNIX timestamp）
     }
 
     uint256 public nextId;
@@ -26,6 +30,14 @@ contract TaskManager {
     event TaskCreated(uint256 indexed id, address indexed owner, string ipfsHash);
     event TaskStatusChanged(uint256 indexed id, Status newStatus);
     event TaskRescheduled(uint256 indexed id, uint256 newDueAt);
+
+    // ✅ 新增：日历时间变更审计事件
+    event ScheduleChanged(
+        uint256 indexed id,
+        uint256 newStart,
+        uint256 newEnd,
+        string ipfsChangeHash
+    );
 
     function createTask(
         string calldata title,      // ✅
@@ -43,7 +55,9 @@ contract TaskManager {
             dueAt: dueAt,
             priority: priority,
             status: Status.Active,
-            createdAt: block.timestamp
+            createdAt: block.timestamp,
+            lastStart: 0,
+            lastEnd: 0
         });
 
         tasksByOwner[msg.sender].push(id);
@@ -71,6 +85,23 @@ contract TaskManager {
         emit TaskRescheduled(id, newDueAt);
     }
 
+    // ✅ 新增：专门给「拖拽时间块 / time-blocking」用的接口
+    function logScheduleChange(
+        uint256 id,
+        uint256 newStart,
+        uint256 newEnd,
+        string calldata ipfsHash
+    ) external {
+        Task storage t = tasks[id];
+        require(t.owner == msg.sender, "not owner");
+
+        // 更新最近一次的排期（前端可以直接读）
+        t.lastStart = newStart;
+        t.lastEnd = newEnd;
+
+        emit ScheduleChanged(id, newStart, newEnd, ipfsHash);
+    }
+
     function getTasksByOwner(address user) external view returns (Task[] memory) {
         uint256[] storage ids = tasksByOwner[user];
         Task[] memory out = new Task[](ids.length);
@@ -80,3 +111,4 @@ contract TaskManager {
         return out;
     }
 }
+

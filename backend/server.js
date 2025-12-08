@@ -1,6 +1,11 @@
 // backend/server.js
 const express = require("express");
 const cors = require("cors");
+const { google } = require("googleapis");
+const { ethers } = require("ethers");
+const path = require("path");
+
+require("dotenv").config();
 
 const app = express();
 
@@ -9,7 +14,8 @@ app.use(cors());
 // 自动解析 JSON body
 app.use(express.json());
 
-// 这个就是 POST /api/parse-and-store
+/* -------------------- 现有：parse-and-store -------------------- */
+
 app.post("/api/parse-and-store", async (req, res) => {
   try {
     const { text } = req.body;
@@ -21,25 +27,179 @@ app.post("/api/parse-and-store", async (req, res) => {
       description: text,
       due: null,
       priority: 3,
-      durationMinutes: 60
+      durationMinutes: 60,
     };
 
     const fakeCid = "bafyfakecid1234567890"; // 先随便写一个
 
     res.json({
       parsed: fakeParsed,
-      ipfsCid: fakeCid
+      ipfsCid: fakeCid,
     });
   } catch (err) {
     console.error(err);
     res
       .status(500)
-      .json({ error: err.message || "Internal server error in parse-and-store" });
+      .json({
+        error: err.message || "Internal server error in parse-and-store",
+      });
   }
 });
 
-// 监听 4000 端口
-const PORT = 4000;
+/* -------------------- Google Calendar 配置 -------------------- */
+
+// 创建 OAuth2 client（这里先用固定 refresh_token 简化）
+function getOAuthClient() {
+  const oAuth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.GOOGLE_REDIRECT_URI
+  );
+
+  if (process.env.GOOGLE_REFRESH_TOKEN) {
+    oAuth2Client.setCredentials({
+      refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
+    });
+  }
+
+  return oAuth2Client;
+}
+
+function getEventsClient() {
+  return google.calendar("v3").events;
+}
+
+/* -------------------- Ethers + TaskManager 合约 -------------------- */
+
+// 注意：这里假设你把 Hardhat 的 TaskManager.json 放到了 backend 根目录
+const TaskManagerArtifact = require(path.join(
+  __dirname,
+  "TaskManager.json"
+));
+
+const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
+
+const wallet = new ethers.Wallet(process.env.WALLET_PRIVATE_KEY, provider);
+
+const taskManager = new ethers.Contract(
+  process.env.TASK_MANAGER_ADDRESS,
+  TaskManagerArtifact.abi,
+  wallet
+);
+
+/* -------------------- 日历 API：获取 Google 事件 -------------------- */
+
+// GET /api/calendar/events?timeMin=xxx&timeMax=yyy
+app.get("/api/calendar/events", async (req, res) => {
+  try {
+    const auth = getOAuthClient();
+    const eventsClient = getEventsClient();
+
+    const now = new Date();
+    const weekLater = new Date(now.getTime() + 7 * 24 * 3600 * 1000);
+
+    const timeMin = req.query.timeMin || now.toISOString();
+    const timeMax = req.query.timeMax || weekLater.toISOString();
+
+    const response = await eventsClient.list({
+      auth,
+      calendarId: "primary",
+      timeMin,
+      timeMax,
+      singleEvents: true,
+      orderBy: "startTime",
+    });
+
+    res.json(response.data.items || []);
+  } catch (err) {
+    console.error("Error listing events:", err);
+    res.status(500).json({ error: "failed to list events" });
+  }
+});
+
+/* --------- 日历 API：从 task 创建一个 Google Calendar 事件 --------- */
+
+// POST /api/calendar/events
+// body: { taskId, title, description, start, end }
+app.post("/api/calendar/events", async (req, res) => {
+  try {
+    const { taskId, title, description, start, end } = req.body;
+
+    const auth = getOAuthClient();
+    const eventsClient = getEventsClient();
+
+    const response = await eventsClient.insert({
+      auth,
+      calendarId: "primary",
+      requestBody: {
+        summary: title,
+        description,
+        start: { dateTime: new Date(start).toISOString() },
+        end: { dateTime: new Date(end).toISOString() },
+        extendedProperties: {
+          private: {
+            taskId: String(taskId), // 把 taskId 挂到 event 上，之后拖拽还能知道对应哪个任务
+          },
+        },
+      },
+    });
+
+    res.json(response.data);
+  } catch (err) {
+    console.error("Error creating event:", err);
+    res.status(500).json({ error: "failed to create event" });
+  }
+});
+
+/* ---- 日历 API：更新时间块 + 调 TaskManager.logScheduleChange ---- */
+
+// PATCH /api/calendar/events/:eventId
+// body: { taskId, start, end, ipfsCidOfChange }
+app.patch("/api/calendar/events/:eventId", async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const { taskId, start, end, ipfsCidOfChange } = req.body;
+
+    const auth = getOAuthClient();
+    const eventsClient = getEventsClient();
+
+    // 1) 先更新 Google Calendar 事件时间
+    const patched = await eventsClient.patch({
+      auth,
+      calendarId: "primary",
+      eventId,
+      requestBody: {
+        start: { dateTime: new Date(start).toISOString() },
+        end: { dateTime: new Date(end).toISOString() },
+      },
+    });
+
+    // 2) 再在链上记一条「时间修改」的审计日志
+    const newStartTs = Math.floor(new Date(start).getTime() / 1000);
+    const newEndTs = Math.floor(new Date(end).getTime() / 1000);
+
+    // 注意：这里的钱包是 WALLET_PRIVATE_KEY 对应的账户，
+    // 必须和任务 owner 一致，合约里的 require(t.owner == msg.sender) 才会通过。
+    const tx = await taskManager.logScheduleChange(
+      taskId,
+      newStartTs,
+      newEndTs,
+      ipfsCidOfChange
+    );
+    await tx.wait();
+
+    res.json({ calendarEvent: patched.data, txHash: tx.hash });
+  } catch (err) {
+    console.error("Error patching event / logging schedule:", err);
+    res
+      .status(500)
+      .json({ error: "failed to patch event or log on-chain" });
+  }
+});
+
+/* -------------------- 启动服务器 -------------------- */
+
+const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`Backend listening on http://localhost:${PORT}`);
 });
