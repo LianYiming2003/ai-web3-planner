@@ -4,6 +4,7 @@ import { Contract, ethers } from "ethers";
 import { useWallet } from "./hooks/useWallet";
 import TaskInbox from "./components/TaskInbox";
 import TaskCalendar from "./components/TaskCalendar";
+import MeetingRecaps from "./components/MeetingRecaps";
 import TaskManagerABIJson from "./abis/TaskManager.json";
 import "./App.css";
 
@@ -26,6 +27,7 @@ export type OnChainTask = {
   createdAt: bigint;
   lastStart: bigint;
   lastEnd: bigint;
+  isMeeting: boolean;
 };
 
 type ParsedTask = {
@@ -87,6 +89,7 @@ function App() {
       createdAt: BigInt(t.createdAt),
       lastStart: BigInt(t.lastStart ?? 0),
       lastEnd: BigInt(t.lastEnd ?? 0),
+      isMeeting: Boolean(t.isMeeting ?? false),
     }));
 
     setter(normalized);
@@ -278,7 +281,19 @@ function App() {
         </div>
       )}
 
-      {/* Week5：Calendar 视图（Google Calendar + time-blocked tasks） */}
+      
+      {/* Week6：Meeting Recaps */}
+      {account && provider && (
+        <div style={{ marginTop: 30 }}>
+          <MeetingRecaps
+            provider={provider as any}
+            account={account}
+            onTasksChanged={refreshCalendarTasks}
+          />
+        </div>
+      )}
+
+{/* Week5：Calendar 视图（Google Calendar + time-blocked tasks） */}
       {account && provider && (
         <div style={{ marginTop: 40 }}>
           <h2>Calendar & Time Blocking</h2>

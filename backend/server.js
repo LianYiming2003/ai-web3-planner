@@ -9,10 +9,8 @@ require("dotenv").config();
 
 const app = express();
 
-// 允许前端（不同端口）访问
 app.use(cors());
-// 自动解析 JSON body
-app.use(express.json());
+app.use(express.json({ limit: "2mb" }));
 
 /* -------------------- 现有：parse-and-store -------------------- */
 
@@ -38,11 +36,9 @@ app.post("/api/parse-and-store", async (req, res) => {
     });
   } catch (err) {
     console.error(err);
-    res
-      .status(500)
-      .json({
-        error: err.message || "Internal server error in parse-and-store",
-      });
+    res.status(500).json({
+      error: err.message || "Internal server error in parse-and-store",
+    });
   }
 });
 
@@ -72,13 +68,9 @@ function getEventsClient() {
 /* -------------------- Ethers + TaskManager 合约 -------------------- */
 
 // 注意：这里假设你把 Hardhat 的 TaskManager.json 放到了 backend 根目录
-const TaskManagerArtifact = require(path.join(
-  __dirname,
-  "TaskManager.json"
-));
+const TaskManagerArtifact = require(path.join(__dirname, "TaskManager.json"));
 
 const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
-
 const wallet = new ethers.Wallet(process.env.WALLET_PRIVATE_KEY, provider);
 
 const taskManager = new ethers.Contract(
@@ -138,7 +130,7 @@ app.post("/api/calendar/events", async (req, res) => {
         end: { dateTime: new Date(end).toISOString() },
         extendedProperties: {
           private: {
-            taskId: String(taskId), // 把 taskId 挂到 event 上，之后拖拽还能知道对应哪个任务
+            taskId: String(taskId),
           },
         },
       },
@@ -178,22 +170,180 @@ app.patch("/api/calendar/events/:eventId", async (req, res) => {
     const newStartTs = Math.floor(new Date(start).getTime() / 1000);
     const newEndTs = Math.floor(new Date(end).getTime() / 1000);
 
-    // 注意：这里的钱包是 WALLET_PRIVATE_KEY 对应的账户，
-    // 必须和任务 owner 一致，合约里的 require(t.owner == msg.sender) 才会通过。
     const tx = await taskManager.logScheduleChange(
       taskId,
       newStartTs,
       newEndTs,
-      ipfsCidOfChange
+      ipfsCidOfChange || ""
     );
     await tx.wait();
 
     res.json({ calendarEvent: patched.data, txHash: tx.hash });
   } catch (err) {
     console.error("Error patching event / logging schedule:", err);
-    res
-      .status(500)
-      .json({ error: "failed to patch event or log on-chain" });
+    res.status(500).json({ error: "failed to patch event or log on-chain" });
+  }
+});
+
+/* ==================== Week6：Meeting store + dummy recap（不需要 OpenAI）==================== */
+
+// 依赖：npm i web3.storage
+let Web3Storage, File;
+try {
+  ({ Web3Storage, File } = require("web3.storage"));
+} catch (e) {
+  console.warn("web3.storage not installed yet. (OK for now, will use fake CID)");
+}
+
+function getW3() {
+  const token = process.env.WEB3STORAGE_TOKEN;
+  if (!token) return null;
+  if (!Web3Storage) return null;
+  return new Web3Storage({ token });
+}
+
+async function putDir(files) {
+  const w3 = getW3();
+  if (!w3) return null;
+  return await w3.put(files, { wrapWithDirectory: true });
+}
+
+function yyyyMmDdPlus(days) {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+// POST /api/meeting/store
+// body: { title, attendees: string[], notes, startAt, endAt }
+app.post("/api/meeting/store", async (req, res) => {
+  try {
+    const { title, attendees, notes, startAt, endAt } = req.body || {};
+    if (!title || !startAt || !endAt) {
+      return res.status(400).json({ error: "title, startAt, endAt are required" });
+    }
+
+    const meeting = {
+      title,
+      attendees: Array.isArray(attendees) ? attendees : [],
+      notes: notes || "",
+      startAt,
+      endAt,
+      createdAt: new Date().toISOString(),
+    };
+
+    // if no web3.storage token, return fake
+    if (!File || !getW3()) {
+      return res.json({ cid: "bafyfakecid-meeting-dev", path: "meeting.json", meeting });
+    }
+
+    const cid = await putDir([
+      new File([JSON.stringify(meeting, null, 2)], "meeting.json", { type: "application/json" }),
+    ]);
+
+    res.json({ cid, path: "meeting.json", meeting });
+  } catch (e) {
+    console.error("meeting/store error:", e);
+    res.status(500).json({ error: e.message || "meeting store failed" });
+  }
+});
+
+// POST /api/meeting/recap
+// body: { meeting: {...} }
+app.post("/api/meeting/recap", async (req, res) => {
+  try {
+    const { meeting } = req.body || {};
+    if (!meeting || !meeting.title) {
+      return res.status(400).json({ error: "meeting is required" });
+    }
+
+    // ✅ Dummy recap generator（后面你有 OpenAI key 再替换这一段）
+    const title = meeting.title || "(Untitled)";
+    const attendees = Array.isArray(meeting.attendees) ? meeting.attendees : [];
+    const notes = meeting.notes || "";
+    const startAt = meeting.startAt || "";
+    const endAt = meeting.endAt || "";
+
+    const recapJson = {
+      title,
+      summary_bullets: [
+        "This is a placeholder recap (no OpenAI API key configured).",
+        "It demonstrates the pipeline: Meeting → Recap JSON/MD → IPFS → on-chain pointer.",
+        notes ? `Notes length: ${String(notes).length} characters.` : "No notes provided.",
+      ],
+      action_items: [
+        {
+          title: "Follow up on discussion points",
+          owner: attendees[0] || "Unassigned",
+          due: yyyyMmDdPlus(2),
+          priority: 3,
+        },
+        {
+          title: "Draft next steps / plan",
+          owner: attendees[1] || attendees[0] || "Unassigned",
+          due: yyyyMmDdPlus(4),
+          priority: 3,
+        },
+        {
+          title: "Schedule the next meeting",
+          owner: "Unassigned",
+          due: null,
+          priority: 2,
+        },
+      ],
+    };
+
+    const actionItems = recapJson.action_items;
+
+    const md = [
+      `# ${title}`,
+      "",
+      startAt || endAt ? `**When:** ${startAt} → ${endAt}` : "",
+      attendees.length ? `**Attendees:** ${attendees.join(", ")}` : "",
+      "",
+      "## Summary",
+      ...recapJson.summary_bullets.map((b) => `- ${b}`),
+      "",
+      "## Action Items",
+      ...actionItems.map((ai) => {
+        const due = ai.due ? ` (due ${ai.due})` : "";
+        return `- ${ai.title} — **${ai.owner}**${due}`;
+      }),
+      "",
+      "---",
+      "Generated by dummy backend recap (no OpenAI).",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    // if no web3.storage token, return fake CID but still return content
+    if (!File || !getW3()) {
+      return res.json({
+        recapCid: "bafyfakecid-recap-dev",
+        actionItems,
+        recapMd: md,
+        recapJson,
+      });
+    }
+
+    const files = [
+      new File([JSON.stringify(recapJson, null, 2)], "recap.json", { type: "application/json" }),
+      new File([md], "recap.md", { type: "text/markdown" }),
+      new File([JSON.stringify(actionItems, null, 2)], "action_items.json", { type: "application/json" }),
+    ];
+
+    actionItems.forEach((ai, i) => {
+      files.push(
+        new File([JSON.stringify(ai, null, 2)], `action_item_${i}.json`, { type: "application/json" })
+      );
+    });
+
+    const recapCid = await putDir(files);
+
+    res.json({ recapCid, actionItems, recapMd: md, recapJson });
+  } catch (e) {
+    console.error("meeting/recap error:", e);
+    res.status(500).json({ error: e.message || "meeting recap failed" });
   }
 });
 

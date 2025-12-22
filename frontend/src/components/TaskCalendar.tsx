@@ -30,7 +30,7 @@ const TASK_MANAGER_ABI =
 
 interface TaskCalendarProps {
   tasks: OnChainTask[];
-  provider: ethers.providers.Web3Provider | null;
+  provider: any; // ethers v6 BrowserProvider (or compatible)
   // App 传进来，用来在链上状态变化后重新拉任务
   onTasksChanged?: () => Promise<void> | void;
 }
@@ -113,7 +113,7 @@ const TaskCalendar: React.FC<TaskCalendarProps> = ({
 
           return {
             id: `task-${Number(t.id)}`,
-            title: t.title || `Task #${String(t.id)}`,
+            title: ((t as any).isMeeting ? "📅 " : "") + (t.title || ("Task #" + String(t.id))),
             start: new Date(startTs * 1000).toISOString(),
             end: new Date(endTs * 1000).toISOString(),
             extendedProps: {
@@ -231,5 +231,4 @@ const TaskCalendar: React.FC<TaskCalendarProps> = ({
 };
 
 export default TaskCalendar;
-
 
