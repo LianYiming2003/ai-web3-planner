@@ -4,7 +4,7 @@ import { Contract, ethers } from "ethers";
 import { useWallet } from "./hooks/useWallet";
 import TaskInbox from "./components/TaskInbox";
 import TaskCalendar from "./components/TaskCalendar";
-import MeetingRecaps from "./components/MeetingRecaps";
+import Planner from "./components/Planner";
 import TaskManagerABIJson from "./abis/TaskManager.json";
 import "./App.css";
 
@@ -27,7 +27,6 @@ export type OnChainTask = {
   createdAt: bigint;
   lastStart: bigint;
   lastEnd: bigint;
-  isMeeting: boolean;
 };
 
 type ParsedTask = {
@@ -89,7 +88,6 @@ function App() {
       createdAt: BigInt(t.createdAt),
       lastStart: BigInt(t.lastStart ?? 0),
       lastEnd: BigInt(t.lastEnd ?? 0),
-      isMeeting: Boolean(t.isMeeting ?? false),
     }));
 
     setter(normalized);
@@ -200,7 +198,7 @@ function App() {
   // ----------------- 渲染 -----------------
   return (
     <div className="app-container">
-      <h1 className="app-title">Week 5 Demo</h1>
+      <h1 className="app-title">Week 8 Demo</h1>
       <hr className="app-divider" />
 
       {account && (
@@ -281,20 +279,14 @@ function App() {
         </div>
       )}
 
-      
-      {/* Week6：Meeting Recaps */}
-      {account && provider && (
-        <div style={{ marginTop: 30 }}>
-          <MeetingRecaps
-            provider={provider as any}
-            account={account}
-            onTasksChanged={refreshCalendarTasks}
-          />
+      {/* Week5：Calendar 视图（Google Calendar + time-blocked tasks） */}
+            {account && provider && (
+        <div style={{ marginTop: 32 }}>
+          <Planner provider={provider as any} account={account} />
         </div>
       )}
 
-{/* Week5：Calendar 视图（Google Calendar + time-blocked tasks） */}
-      {account && provider && (
+{account && provider && (
         <div style={{ marginTop: 40 }}>
           <h2>Calendar & Time Blocking</h2>
           <TaskCalendar
