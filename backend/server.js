@@ -59,11 +59,9 @@ app.post("/api/parse-and-store", async (req, res) => {
     });
   } catch (err) {
     console.error(err);
-    res
-      .status(500)
-      .json({
-        error: err.message || "Internal server error in parse-and-store",
-      });
+    res.status(500).json({
+      error: err.message || "Internal server error in parse-and-store",
+    });
   }
 });
 
@@ -93,10 +91,7 @@ function getEventsClient() {
 /* -------------------- Ethers + TaskManager 合约 -------------------- */
 
 // 注意：这里假设你把 Hardhat 的 TaskManager.json 放到了 backend 根目录
-const TaskManagerArtifact = require(path.join(
-  __dirname,
-  "TaskManager.json"
-));
+const TaskManagerArtifact = require(path.join(__dirname, "TaskManager.json"));
 
 const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
 
@@ -133,8 +128,15 @@ app.get("/api/calendar/events", async (req, res) => {
 
     res.json(response.data.items || []);
   } catch (err) {
-    console.error("Error listing events:", err);
-    res.status(500).json({ error: "failed to list events" });
+    // googleapis errors usually include err.response.data
+    console.error("Error listing events (raw):", err);
+    console.error("Error listing events (message):", err?.message);
+    console.error("Error listing events (response.data):", err?.response?.data);
+
+    res.status(500).json({
+      error: "failed to list events",
+      detail: err?.response?.data || err?.message || String(err),
+    });
   }
 });
 
@@ -212,9 +214,7 @@ app.patch("/api/calendar/events/:eventId", async (req, res) => {
     res.json({ calendarEvent: patched.data, txHash: tx.hash });
   } catch (err) {
     console.error("Error patching event / logging schedule:", err);
-    res
-      .status(500)
-      .json({ error: "failed to patch event or log on-chain" });
+    res.status(500).json({ error: "failed to patch event or log on-chain" });
   }
 });
 
@@ -230,6 +230,33 @@ app.post("/api/planner", async (req, res) => {
     const { address, mode } = req.body || {};
     if (!address) return res.status(400).json({ error: "address is required" });
     const planMode = mode === "week" ? "week" : "today";
+
+    // ---------------- Range helpers (NEW) ----------------
+    function startOfDay(d) {
+      const x = new Date(d);
+      x.setHours(0, 0, 0, 0);
+      return x;
+    }
+
+    function endOfDay(d) {
+      const x = new Date(d);
+      x.setHours(23, 59, 59, 999);
+      return x;
+    }
+
+    const now = new Date();
+
+    const rangeStart = startOfDay(now);
+
+    // today: [today 00:00 ~ today 23:59:59]
+    // week:  [today 00:00 ~ (today+6 days) 23:59:59]  => a 7-day window
+    const rangeEnd =
+      planMode === "today"
+        ? endOfDay(rangeStart)
+        : endOfDay(new Date(rangeStart.getTime() + 6 * 24 * 3600 * 1000));
+
+    const rangeStartTs = Math.floor(rangeStart.getTime() / 1000);
+    const rangeEndTs = Math.floor(rangeEnd.getTime() / 1000);
 
     // 1) Fetch tasks from chain
     // IMPORTANT: uses on-chain task list; does NOT require Google account linkage.
@@ -248,14 +275,7 @@ app.post("/api/planner", async (req, res) => {
       .sort((a, b) => b.priority - a.priority);
 
     // 2) Build a very simple plan
-    const now = new Date();
     const blocks = [];
-
-    function startOfDay(d) {
-      const x = new Date(d);
-      x.setHours(0, 0, 0, 0);
-      return x;
-    }
 
     function nextHour(d) {
       const x = new Date(d);
@@ -287,7 +307,7 @@ app.post("/api/planner", async (req, res) => {
         cursor = end;
       }
     } else {
-      // next 5 days, 3 blocks per day
+      // next 5 days, 3 blocks per day (this is your heuristic plan content)
       const base = startOfDay(now);
       let idx = 0;
       for (let day = 0; day < 5; day++) {
@@ -318,6 +338,13 @@ app.post("/api/planner", async (req, res) => {
       mode: planMode,
       owner: address,
       generatedAt: new Date().toISOString(),
+
+      // ✅ NEW: range info for better UI display
+      rangeStart: rangeStart.toISOString(),
+      rangeEnd: rangeEnd.toISOString(),
+      rangeStartTs,
+      rangeEndTs,
+
       blocks,
       notes: "Heuristic planner (no OpenAI key). Replace with GPT later.",
     };
@@ -331,6 +358,8 @@ app.post("/api/planner", async (req, res) => {
         "",
         `Owner: ${address}`,
         `Generated: ${plan.generatedAt}`,
+        "",
+        `Range: ${plan.rangeStart} → ${plan.rangeEnd}`,
         "",
         "## Blocks",
         ...blocks.map((b) => `- ${b.start} → ${b.end}: ${b.title}`),
@@ -346,13 +375,92 @@ app.post("/api/planner", async (req, res) => {
       if (uploaded) cid = uploaded;
     }
 
-    const startTs = Math.floor(startOfDay(now).getTime() / 1000);
+    // Use rangeStartTs as on-chain startTs
+    const startTs = rangeStartTs;
+
     res.json({ cid, startTs, plan });
   } catch (e) {
     console.error("planner error:", e);
     res.status(500).json({ error: e.message || "planner failed" });
   }
 });
+
+/* ==================== Week 8: Command Parser (NO OpenAI, stub) ==================== */
+// POST /api/parse-command
+// body: { text: string, address?: string }
+// returns: { action: {...}, message: string }
+app.post("/api/parse-command", async (req, res) => {
+  try {
+    const { text, address } = req.body || {};
+    if (!text || !String(text).trim()) {
+      return res.status(400).json({ error: "text is required" });
+    }
+
+    const t = String(text).trim().toLowerCase();
+
+    // ---- Template actions (rule-based / stub) ----
+    // 1) show today's plan
+    if (t.includes("show") && t.includes("today") && t.includes("plan")) {
+      return res.json({
+        action: { type: "show_plan", mode: "today" },
+        message: "Stub: will fetch /api/planner (today) and show it.",
+      });
+    }
+
+    // 2) summarize this week (stub only)
+    if (t.includes("summarize") && t.includes("week")) {
+      return res.json({
+        action: { type: "summarize_week" },
+        message:
+          "Stub summary: This week includes focus blocks from your task priorities. (No OpenAI configured.)",
+      });
+    }
+
+    // 3) Move team sync to next week -> reschedule a calendar event + log on-chain
+    // We don't have real event/task matching yet, so we return a template with placeholders.
+    // Frontend will prompt user to pick event or taskId later.
+    if (t.includes("move") && t.includes("team") && t.includes("sync") && t.includes("next week")) {
+      // next week: +7 days from now, same time window (template)
+      const now = new Date();
+      const newStart = new Date(now.getTime() + 7 * 24 * 3600 * 1000);
+      newStart.setHours(10, 0, 0, 0); // template time 10:00
+      const newEnd = new Date(newStart.getTime() + 60 * 60 * 1000);
+
+      const newStartTs = Math.floor(newStart.getTime() / 1000);
+      const newEndTs = Math.floor(newEnd.getTime() / 1000);
+
+      return res.json({
+        action: {
+          type: "reschedule",
+          // TODO: in real version, backend would resolve these
+          taskId: 0,            // placeholder
+          eventId: "",          // placeholder (Google Calendar eventId)
+          title: "Team Sync",   // inferred label
+          newStart: newStart.toISOString(),
+          newEnd: newEnd.toISOString(),
+          newStartTs,
+          newEndTs,
+          ipfsHash: "bafyfakecid-change-log", // placeholder audit cid
+          requiresSignature: true,
+          requiresCalendar: true,
+        },
+        message:
+          "Stub: parsed as reschedule. Next: frontend should ask user to choose the calendar event + taskId, then sign on-chain logScheduleChange.",
+      });
+    }
+
+    // Default fallback: unknown command
+    return res.json({
+      action: { type: "unknown", raw: text },
+      message:
+        "Stub parser: I don't recognize this command yet. Try: 'Show today’s plan', 'Move team sync to next week', 'Summarize this week'.",
+    });
+  } catch (e) {
+    console.error("parse-command error:", e);
+    res.status(500).json({ error: e.message || "parse-command failed" });
+  }
+});
+
 
 app.listen(PORT, () => {
   console.log(`Backend listening on http://localhost:${PORT}`);

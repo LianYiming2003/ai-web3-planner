@@ -14,7 +14,7 @@ const PLAN_MANAGER_ABI = [
 type PlanBlock = {
   title: string;
   start: string; // ISO
-  end: string;   // ISO
+  end: string; // ISO
   taskId?: number;
 };
 
@@ -24,6 +24,12 @@ type PlanJson = {
   generatedAt: string;
   blocks: PlanBlock[];
   notes?: string;
+
+  // ✅ NEW: range fields from backend
+  rangeStart?: string; // ISO
+  rangeEnd?: string; // ISO
+  rangeStartTs?: number;
+  rangeEndTs?: number;
 };
 
 type OnChainPlan = {
@@ -40,7 +46,11 @@ type Props = {
 };
 
 function toNum(bn: any): number {
-  try { return Number(bn); } catch { return 0; }
+  try {
+    return Number(bn);
+  } catch {
+    return 0;
+  }
 }
 
 // If you upload via Web3.Storage (wrapWithDirectory),
@@ -151,9 +161,17 @@ export default function Planner({ provider, account }: Props) {
           <div className="font-semibold">
             Current plan {planCid ? `(CID: ${planCid.slice(0, 12)}...)` : ""}
           </div>
+
           <div className="text-xs text-gray-500" style={{ marginTop: 6 }}>
             Mode: {plan.mode} · Generated: {new Date(plan.generatedAt).toLocaleString()}
           </div>
+
+          {/* ✅ NEW: range display */}
+          {plan.rangeStart && plan.rangeEnd && (
+            <div className="text-xs text-gray-500" style={{ marginTop: 6 }}>
+              Range: {new Date(plan.rangeStart).toLocaleString()} → {new Date(plan.rangeEnd).toLocaleString()}
+            </div>
+          )}
 
           <div className="space-y-2" style={{ marginTop: 12 }}>
             {plan.blocks.map((b, i) => (
@@ -172,7 +190,9 @@ export default function Planner({ provider, account }: Props) {
       <div className="border rounded-lg px-3 py-3">
         <div className="font-semibold">Saved plans (on-chain pointers)</div>
         {saved.length === 0 ? (
-          <div className="text-sm" style={{ marginTop: 8 }}>No saved plans yet.</div>
+          <div className="text-sm" style={{ marginTop: 8 }}>
+            No saved plans yet.
+          </div>
         ) : (
           <div className="space-y-2" style={{ marginTop: 10 }}>
             {saved.map((p) => (
@@ -186,7 +206,11 @@ export default function Planner({ provider, account }: Props) {
                     {new Date(p.createdAt * 1000).toLocaleString()}
                   </div>
                 </div>
-                <button className="border rounded px-3 py-1 text-sm" disabled={loading} onClick={() => viewFromIpfs(p.ipfsHash)}>
+                <button
+                  className="border rounded px-3 py-1 text-sm"
+                  disabled={loading}
+                  onClick={() => viewFromIpfs(p.ipfsHash)}
+                >
                   View
                 </button>
               </div>

@@ -6,6 +6,7 @@ import TaskInbox from "./components/TaskInbox";
 import TaskCalendar from "./components/TaskCalendar";
 import Planner from "./components/Planner";
 import TaskManagerABIJson from "./abis/TaskManager.json";
+import SmartAssistant from "./components/SmartAssistant";
 import "./App.css";
 
 // ----------------- 合约 ABI & 地址 -----------------
@@ -266,6 +267,13 @@ function App() {
 
       {msg && <p style={{ color: "gray" }}>{msg}</p>}
       {error && <p className="app-error">{error}</p>}
+
+      {account && provider && (
+  <div style={{ marginTop: 32 }}>
+    <SmartAssistant provider={provider as any} account={account} />
+  </div>
+)}
+
 
       {/* Week4：Task Inbox 列表 */}
       {account && provider && (
